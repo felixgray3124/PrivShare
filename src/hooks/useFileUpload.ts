@@ -35,8 +35,8 @@ export const useFileUpload = () => {
   const mutation = useMutation({
     mutationKey: ["file-upload", address],
     mutationFn: async ({ file, isEncrypted, customKey }: UploadOptions) => {
-      if (!synapse) throw new Error("Synapse not found");
-      if (!address) throw new Error("Address not found");
+      if (!synapse) throw new Error("Synapse not available. Please check your wallet connection and try again.");
+      if (!address) throw new Error("Wallet not connected. Please connect your wallet to upload files.");
       
       setProgress(0);
       setUploadedInfo(null);
@@ -88,6 +88,9 @@ export const useFileUpload = () => {
       setStatus("💰 Checking USDFC balance and storage allowances...");
       setProgress(20);
 
+      // 用于存储提供商信息的变量
+      let selectedProvider: any = null;
+
       // Create storage service
       const storageService = await synapse.createStorage({
         callbacks: {
@@ -115,6 +118,8 @@ export const useFileUpload = () => {
           onProviderSelected: (provider) => {
             console.log("Storage provider selected:", provider);
             setStatus(`🏪 Storage provider selected`);
+            // 直接存储到变量中
+            selectedProvider = provider;
           },
         },
       });
@@ -166,7 +171,8 @@ export const useFileUpload = () => {
         pieceCid: pieceCid.toV1().toString(),
         isEncrypted,
         encryptionKey,
-        iv
+        iv,
+        providerInfo: selectedProvider
       });
       
       await storeMappingToIPFS(shareCode, pieceCid.toV1().toString(), {
@@ -178,7 +184,7 @@ export const useFileUpload = () => {
         iv: iv,
         uploader: address,
         uploadTime: Date.now(),
-      });
+      }, selectedProvider);
       
       setProgress(95);
       console.log('Setting upload info:', {

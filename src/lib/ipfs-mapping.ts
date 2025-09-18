@@ -4,6 +4,31 @@
 const PINATA_API_URL = 'https://api.pinata.cloud';
 const PINATA_GATEWAY_URL = 'https://gateway.pinata.cloud';
 
+// Helper function to convert BigInt to string for JSON serialization
+function convertBigIntToString(obj: any): any {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+  
+  if (typeof obj === 'bigint') {
+    return obj.toString();
+  }
+  
+  if (Array.isArray(obj)) {
+    return obj.map(convertBigIntToString);
+  }
+  
+  if (typeof obj === 'object') {
+    const converted: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      converted[key] = convertBigIntToString(value);
+    }
+    return converted;
+  }
+  
+  return obj;
+}
+
 // Get Pinata authentication headers
 function getPinataHeaders(): Record<string, string> {
   const jwt = import.meta.env.VITE_PINATA_JWT;
@@ -29,16 +54,20 @@ function getPinataHeaders(): Record<string, string> {
 /**
  * Store share code and CID mapping to IPFS
  */
-export async function storeMappingToIPFS(shareCode: string, pieceCid: string, metadata: any) {
+export async function storeMappingToIPFS(shareCode: string, pieceCid: string, metadata: any, providerInfo?: any) {
   try {
     // Create mapping data
     const mappingData = {
       shareCode,
       pieceCid,
       metadata,
+      providerInfo, // 添加提供商信息
       timestamp: Date.now(),
       version: '1.0'
     };
+    
+    // Convert BigInt to string for JSON serialization
+    const serializableData = convertBigIntToString(mappingData);
     
     // Try to upload to IPFS
     const headers = getPinataHeaders();
@@ -47,7 +76,7 @@ export async function storeMappingToIPFS(shareCode: string, pieceCid: string, me
       method: 'POST',
       headers,
       body: JSON.stringify({
-        pinataContent: mappingData,
+        pinataContent: serializableData,
         pinataMetadata: {
           name: `privshare-mapping-${shareCode.replace('privshare://', '')}`,
           keyvalues: {
@@ -79,9 +108,9 @@ export async function storeMappingToIPFS(shareCode: string, pieceCid: string, me
 }
 
 /**
- * Get CID corresponding to share code from IPFS
+ * Get mapping data corresponding to share code from IPFS
  */
-export async function getCidFromIPFS(shareCode: string) {
+export async function getMappingFromIPFS(shareCode: string) {
   try {
     const code = extractCodeFromShareCode(shareCode);
     const headers = getPinataHeaders();
@@ -111,7 +140,7 @@ export async function getCidFromIPFS(shareCode: string) {
       if (dataResponse.ok) {
         const mappingData = await dataResponse.json();
         console.log('Retrieved mapping data from IPFS:', mappingData);
-        return mappingData.pieceCid;
+        return mappingData; // 返回完整的映射数据
       } else {
         console.error('Unable to get data from IPFS Gateway:', dataResponse.status);
       }
@@ -123,6 +152,14 @@ export async function getCidFromIPFS(shareCode: string) {
     console.error('Failed to get from IPFS:', error);
     return null;
   }
+}
+
+/**
+ * Get CID corresponding to share code from IPFS (backward compatibility)
+ */
+export async function getCidFromIPFS(shareCode: string) {
+  const mappingData = await getMappingFromIPFS(shareCode);
+  return mappingData?.pieceCid || null;
 }
 
 /**

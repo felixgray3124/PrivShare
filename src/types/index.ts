@@ -8,6 +8,13 @@ export interface FileMetadata {
   shareCode: string
   uploadTime: number
   uploader: string
+  // 新增字段
+  pieceCid?: string
+  fileName?: string
+  fileSize?: number
+  isEncrypted?: boolean
+  encryptionKey?: string
+  providerInfo?: any
 }
 
 export interface WalletInfo {

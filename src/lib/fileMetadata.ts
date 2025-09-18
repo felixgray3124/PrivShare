@@ -12,6 +12,7 @@ export interface FileMetadata {
   uploader: string
   uploadTime: number
   expiresAt?: number
+  providerInfo?: any
 }
 
 // Metadata is now completely stored in IPFS, no longer using local storage

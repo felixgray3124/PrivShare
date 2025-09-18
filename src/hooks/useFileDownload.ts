@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { useAccount } from "wagmi";
-import { useSynapse } from "../providers/SynapseProvider";
 import { decryptFile } from "../lib/encryption";
 import { validateShareCode, extractCodeFromShareCode } from "../lib/ipfs-mapping";
+import { asPieceCID } from "@filoz/synapse-sdk/piece";
 
 // Pinata API configuration
 const PINATA_API_URL = 'https://api.pinata.cloud';
@@ -47,20 +46,17 @@ export type DownloadOptions = {
 };
 
 /**
- * Hook to download a file from the Filecoin network using Synapse.
+ * Hook to download a file from the Filecoin network using direct provider access.
+ * This implementation bypasses Synapse and directly accesses Filecoin storage providers.
  */
 export const useFileDownload = () => {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [downloadInfo, setDownloadInfo] = useState<DownloadInfo | null>(null);
-  const { synapse } = useSynapse();
-  const { address } = useAccount();
   
   const mutation = useMutation({
-    mutationKey: ["file-download", address],
+    mutationKey: ["file-download"],
     mutationFn: async ({ shareCode, encryptionKey }: DownloadOptions) => {
-      if (!synapse) throw new Error("Synapse not found");
-      if (!address) throw new Error("Address not found");
       
       setProgress(0);
       setDownloadInfo(null);
@@ -105,8 +101,11 @@ export const useFileDownload = () => {
             fileMetadata = mappingData.metadata;
             // pieceCid is at the top level of mappingData, need to set manually
             fileMetadata.pieceCid = mappingData.pieceCid;
+            // 添加提供商信息
+            (fileMetadata as any).providerInfo = mappingData.providerInfo;
             console.log('Extracted metadata:', fileMetadata);
             console.log('Piece CID:', fileMetadata.pieceCid);
+            console.log('Provider Info:', (fileMetadata as any).providerInfo);
           } else {
             throw new Error('Unable to get metadata from IPFS');
           }
@@ -145,8 +144,93 @@ export const useFileDownload = () => {
 
       console.log('Starting file download from Filecoin:', fileMetadata.pieceCid);
 
-      // Download file from Filecoin using Synapse
-      const fileData = await synapse.storage.download(fileMetadata.pieceCid);
+      // Download file from Filecoin using recorded provider info
+      const pieceCid = asPieceCID(fileMetadata.pieceCid);
+      if (!pieceCid) {
+        throw new Error("Invalid PieceCID format");
+      }
+      
+      let fileData: Uint8Array | null = null;
+      let lastError: Error | null = null;
+      
+      // 优先使用记录的提供商信息
+      if ((fileMetadata as any).providerInfo?.products?.PDP?.data?.serviceURL) {
+        const providerUrl = (fileMetadata as any).providerInfo.products.PDP.data.serviceURL;
+        console.log('Using recorded provider:', providerUrl);
+        
+        try {
+          // 尝试从记录的提供商下载
+          const downloadUrl = `${providerUrl}/piece/${pieceCid.toString()}`;
+          console.log('Attempting download from recorded provider:', downloadUrl);
+          
+          const response = await fetch(downloadUrl);
+          if (response.ok) {
+            fileData = new Uint8Array(await response.arrayBuffer());
+            console.log(`Successfully downloaded from recorded provider: ${downloadUrl}`);
+          } else {
+            console.warn(`Recorded provider failed: ${response.status} ${response.statusText}`);
+          }
+        } catch (error) {
+          console.warn('Recorded provider failed:', error);
+          lastError = error as Error;
+        }
+      }
+      
+      // 如果记录的提供商失败，尝试公共网关
+      if (!fileData) {
+        console.log('Recorded provider failed, trying public gateways...');
+        
+        // Known public IPFS/Filecoin gateways
+        const knownProviders = [
+          "https://ipfs.io",
+          "https://cloudflare-ipfs.com", 
+          "https://dweb.link",
+          "https://gateway.pinata.cloud",
+          "https://api.web3.storage",
+          "https://ipfs.filebase.io",
+          "https://ipfs.eth.aragon.network",
+          "https://ipfs.fleek.co",
+        ];
+        
+        // Try to download from each known provider until one succeeds
+        for (const providerUrl of knownProviders) {
+          try {
+            // Try different possible endpoints for the piece
+            const possibleEndpoints = [
+              `${providerUrl}/ipfs/${pieceCid.toString()}`,
+              `${providerUrl}/ipfs/${pieceCid.toString()}?format=raw`,
+              `${providerUrl}/api/v0/cat?arg=${pieceCid.toString()}`,
+              `${providerUrl}/piece/${pieceCid.toString()}`,
+            ];
+            
+            for (const endpoint of possibleEndpoints) {
+              try {
+                const response = await fetch(endpoint);
+                if (response.ok) {
+                  fileData = new Uint8Array(await response.arrayBuffer());
+                  console.log(`Successfully downloaded from public gateway: ${endpoint}`);
+                  break;
+                }
+              } catch (error) {
+                // Continue to next endpoint
+                continue;
+              }
+            }
+            
+            if (fileData) {
+              break; // Success!
+            }
+          } catch (error) {
+            lastError = error as Error;
+            continue; // Try next provider
+          }
+        }
+      }
+      
+      // If we get here, all providers failed
+      if (!fileData) {
+        throw new Error(`Failed to download file from any provider. Last error: ${lastError?.message || 'Unknown error'}`);
+      }
       
       setStatus("🔓 Processing file...");
       setProgress(70);
