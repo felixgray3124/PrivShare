@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { useSynapse } from "../providers/SynapseProvider";
 // import { Synapse } from "@filoz/synapse-sdk";
 import { encryptFile, generateKey } from "../lib/encryption";
 import { generateRandomShareCode, storeMappingToIPFS } from "../lib/ipfs-mapping";
+import { preflightCheck } from "../lib/preflightCheck";
 
 export type UploadedInfo = {
   fileName?: string;
@@ -29,9 +30,10 @@ export const useFileUpload = () => {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [uploadedInfo, setUploadedInfo] = useState<UploadedInfo | null>(null);
+  const [lastAddress, setLastAddress] = useState<string | undefined>(undefined);
   const { synapse } = useSynapse();
   const { address } = useAccount();
-  
+
   const mutation = useMutation({
     mutationKey: ["file-upload", address],
     mutationFn: async ({ file, isEncrypted, customKey }: UploadOptions) => {
@@ -88,9 +90,15 @@ export const useFileUpload = () => {
       setStatus("💰 Checking USDFC balance and storage allowances...");
       setProgress(20);
 
-      // Check network connectivity
+      // Variable to store provider information
+      let selectedProvider: any = null;
+      let usableDataSets: any[] = [];
+
+      // Check wallet and network status
       try {
-        setStatus("🌐 Checking network connectivity...");
+        setStatus("🔍 Checking wallet and network status...");
+        
+        // Check network connectivity
         const testResponse = await fetch('https://api.calibration.node.glif.io/rpc/v1', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -108,13 +116,52 @@ export const useFileUpload = () => {
         } else {
           console.log('Network connectivity test passed');
         }
+
+        // Check wallet balance and existing datasets
+        setStatus("🔍 Checking wallet status and existing datasets...");
+        const dataSets = await synapse.storage.findDataSets(address);
+        console.log('Existing datasets for address:', address, dataSets);
+        
+        // Check if there are any incomplete datasets
+        const incompleteDataSets = dataSets.filter(ds => !ds.isLive || !ds.isManaged);
+        if (incompleteDataSets.length > 0) {
+          console.warn('Found incomplete datasets:', incompleteDataSets);
+          setStatus("⚠️ Found incomplete datasets, this might cause issues. Proceeding with caution...");
+        }
+        
+        // Check if we have any usable datasets
+        usableDataSets = dataSets.filter(ds => ds.isLive && ds.isManaged);
+        if (usableDataSets.length === 0) {
+          console.log('No existing datasets found for new wallet, will let Synapse create one automatically');
+          setStatus("ℹ️ No existing datasets found, will create a new one");
+        } else {
+          console.log('Found existing datasets:', usableDataSets);
+          console.log('First dataset details:', {
+            clientDataSetId: usableDataSets[0].clientDataSetId,
+            pdpVerifierDataSetId: usableDataSets[0].pdpVerifierDataSetId,
+            providerId: usableDataSets[0].providerId,
+            isLive: usableDataSets[0].isLive,
+            isManaged: usableDataSets[0].isManaged
+          });
+          setStatus(`✅ Found ${usableDataSets.length} existing dataset(s), will use the first one`);
+        }
+        
+        setStatus("✅ Wallet and network status verified");
       } catch (networkError) {
-        console.warn('Network connectivity test failed:', networkError);
-        setStatus("⚠️ Network connectivity issues detected, proceeding with caution...");
+        console.warn('Network/wallet check failed:', networkError);
+        setStatus("⚠️ Network/wallet check failed, proceeding with caution...");
       }
 
-      // Variable to store provider information
-      let selectedProvider: any = null;
+      // Preflight check for USDFC balance and allowances
+      setStatus("💰 Checking USDFC balance and storage allowances...");
+      setProgress(5);
+      await preflightCheck(
+        file,
+        synapse,
+        usableDataSets.length === 0, // Include dataset creation fee if no existing datasets
+        setStatus,
+        setProgress
+      );
 
       // Create storage service with fallback mechanism and retry logic
       let storageService;
@@ -142,18 +189,33 @@ export const useFileUpload = () => {
       };
       
       try {
-        // First attempt: let Synapse auto-select provider
-        setStatus("🔍 Selecting storage provider...");
-        storageService = await createStorageWithRetry({
+        // Set up storage service with existing dataset or create new one
+        if (usableDataSets.length > 0) {
+          setStatus(`🔍 Setting up storage service with existing dataset (ID: ${usableDataSets[0].pdpVerifierDataSetId})...`);
+        } else {
+          setStatus("🔍 Setting up storage service and creating new dataset...");
+        }
+        
+        // Use existing dataset if available, otherwise let Synapse create a new one
+        const storageOptions: any = {
+          // If we have usable datasets, try to use the first one
+          ...(usableDataSets.length > 0 && { 
+            dataSetId: usableDataSets[0].pdpVerifierDataSetId 
+          }),
           callbacks: {
             onDataSetResolved: (info: any) => {
               console.log("Dataset resolved:", info);
-              setStatus("🔗 Existing dataset found and resolved");
+              if (info.isExisting) {
+                setStatus("🔗 Using existing dataset for this provider");
+              } else {
+                setStatus("🔗 New dataset created for this provider");
+              }
               setProgress(30);
             },
-            onDataSetCreationStarted: (transactionResponse: any) => {
+            onDataSetCreationStarted: (transactionResponse: any, statusUrl?: string) => {
               console.log("Dataset creation started:", transactionResponse);
-              setStatus("🏗️ Creating new dataset on blockchain...");
+              console.log("Dataset creation status URL:", statusUrl);
+              setStatus("🏗️ Creating new dataset for selected provider...");
               setProgress(35);
             },
             onDataSetCreationProgress: (status: any) => {
@@ -163,71 +225,34 @@ export const useFileUpload = () => {
                 setProgress(45);
               }
               if (status.serverConfirmed) {
-                setStatus(`🎉 Dataset ready! (${Math.round(status.elapsedMs / 1000)}s)`);
+                setStatus(`🎉 Dataset ready for this provider! (${Math.round(status.elapsedMs / 1000)}s)`);
                 setProgress(50);
               }
             },
             onProviderSelected: (provider: any) => {
               console.log("Storage provider selected:", provider);
-              setStatus(`🏪 Storage provider selected`);
+              setStatus(`🏪 Selected provider: ${provider.name || `ID ${provider.id}`}`);
               // Store directly to variable
               selectedProvider = provider;
             },
           },
-        });
+        };
+        
+        storageService = await createStorageWithRetry(storageOptions);
       } catch (error) {
-        console.warn("Auto provider selection failed, trying fallback provider ID 3:", error);
+        console.error("Storage creation failed:", error);
         lastError = error as Error;
         
-        // Fallback: Force use provider ID 3 (ezpdp)
-        setStatus(`🔄 Provider failed, trying fallback provider (ID: 3)...`);
-        setProgress(30);
-        
-        try {
-          storageService = await createStorageWithRetry({
-            providerId: 3, // Force use ezpdp provider
-            callbacks: {
-              onDataSetResolved: (info: any) => {
-                console.log("Fallback dataset resolved:", info);
-                setStatus("🔗 Fallback dataset found and resolved");
-                setProgress(30);
-              },
-              onDataSetCreationStarted: (transactionResponse: any) => {
-                console.log("Fallback dataset creation started:", transactionResponse);
-                setStatus("🏗️ Creating dataset with fallback provider...");
-                setProgress(35);
-              },
-              onDataSetCreationProgress: (status: any) => {
-                console.log("Fallback dataset creation progress:", status);
-                if (status.transactionSuccess) {
-                  setStatus(`⛓️ Fallback dataset transaction confirmed on chain`);
-                  setProgress(45);
-                }
-                if (status.serverConfirmed) {
-                  setStatus(`🎉 Fallback dataset ready! (${Math.round(status.elapsedMs / 1000)}s)`);
-                  setProgress(50);
-                }
-              },
-              onProviderSelected: (provider: any) => {
-                console.log("Fallback storage provider selected:", provider);
-                setStatus(`🏪 Fallback provider selected (ID: 3)`);
-                // Store directly to variable
-                selectedProvider = provider;
-              },
-            },
-          });
-        } catch (fallbackError) {
-          console.error("Fallback provider also failed:", fallbackError);
-          
-          // Provide more helpful error message
-          const errorMessage = fallbackError instanceof Error ? fallbackError.message : 'Unknown error';
-          if (errorMessage.includes('500') || errorMessage.includes('Internal Server Error')) {
-            throw new Error(`Upload failed: Network connection issues. Please check your internet connection and try again. Both providers returned server errors (500). This might be a temporary network issue.`);
-          } else if (errorMessage.includes('failed to estimate gas')) {
-            throw new Error(`Upload failed: Blockchain transaction failed. This might be due to network congestion or insufficient gas. Please try again later.`);
-          } else {
-            throw new Error(`Upload failed: Both auto-selected and fallback providers failed. Auto-selected error: ${lastError?.message}. Fallback error: ${errorMessage}`);
-          }
+        // Enhanced error handling with specific guidance
+        const errorMessage = lastError?.message || 'Unknown error';
+        if (errorMessage.includes('500') || errorMessage.includes('Internal Server Error')) {
+          throw new Error(`Upload failed: Network connection issues. Please check your internet connection and try again. The storage provider returned a server error (500). This might be a temporary network issue.`);
+        } else if (errorMessage.includes('exit=[33]') || errorMessage.includes('contract reverted')) {
+          throw new Error(`Upload failed: Contract execution failed (Error 33). This often happens with new wallets when creating datasets. The wallet may not have sufficient permissions or there may be network issues. Please try the following: 1) Wait a few minutes and try again, 2) Refresh the page and reconnect your wallet, 3) Check your wallet has sufficient FIL for gas fees, 4) Try using a different wallet, 5) Contact support if the problem persists.`);
+        } else if (errorMessage.includes('Data set') && errorMessage.includes('not found')) {
+          throw new Error(`Upload failed: Dataset access denied. This wallet cannot access the specified dataset. The system will try to create a new dataset for this wallet. Please try again.`);
+        } else {
+          throw new Error(`Upload failed: ${errorMessage}. Please try again or contact support if the problem persists.`);
         }
       }
 
@@ -316,12 +341,50 @@ export const useFileUpload = () => {
     },
     onError: (error) => {
       console.error("Upload failed:", error);
-      setStatus(`❌ Upload failed: ${error.message || "Please try again"}`);
+      
+      // Parse error message for better user experience
+      const errorMessage = error.message || "Unknown error";
+      let userFriendlyMessage = "";
+      
+      if (errorMessage.includes('Network connection issues')) {
+        userFriendlyMessage = "🌐 Network Connection Issue\n\nPlease check your internet connection and try again. This might be a temporary network issue.";
+      } else if (errorMessage.includes('Contract execution failed')) {
+        userFriendlyMessage = "⛓️ Blockchain Transaction Failed\n\nThis usually happens when creating datasets. Please try:\n• Wait a few minutes and try again\n• Refresh the page and reconnect your wallet\n• Ensure your wallet has sufficient FIL for gas fees\n• Try using a different wallet";
+      } else if (errorMessage.includes('Dataset access denied')) {
+        userFriendlyMessage = "🔒 Dataset Access Denied\n\nThis wallet cannot access the specified dataset. The system will create a new dataset for this wallet. Please try again.";
+      } else if (errorMessage.includes('USDFC') || errorMessage.includes('balance')) {
+        userFriendlyMessage = "💰 Insufficient Balance\n\nPlease ensure your wallet has sufficient USDFC to pay for storage costs.";
+      } else if (errorMessage.includes('Synapse not found')) {
+        userFriendlyMessage = "🔧 System Initialization Failed\n\nPlease refresh the page and reconnect your wallet.";
+      } else {
+        userFriendlyMessage = `❌ Upload Failed\n\n${errorMessage}\n\nPlease try again or contact support.`;
+      }
+      
+      setStatus(`❌ ${userFriendlyMessage}`);
       setProgress(0);
       // Reset uploaded info to allow retry
       setUploadedInfo(null);
     },
   });
+
+  // Detect wallet changes and reset state
+  useEffect(() => {
+    if (lastAddress && lastAddress !== address) {
+      console.log('Wallet address changed from', lastAddress, 'to', address);
+      setStatus("🔄 Wallet changed, resetting upload state...");
+      setProgress(0);
+      setUploadedInfo(null);
+      
+      // Reset mutation state to allow fresh start
+      mutation.reset();
+      
+      // Small delay to allow state to settle
+      setTimeout(() => {
+        setStatus("");
+      }, 1000);
+    }
+    setLastAddress(address);
+  }, [address, lastAddress, mutation]);
 
   const handleReset = () => {
     setProgress(0);

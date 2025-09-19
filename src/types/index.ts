@@ -55,3 +55,28 @@ export interface AppState {
   isDownloading: boolean
   error: string | null
 }
+
+/**
+ * Interface representing the Pandora balance data returned from the SDK
+ */
+export interface WarmStorageBalance {
+  rateAllowanceNeeded: bigint;
+  lockupAllowanceNeeded: bigint;
+  currentRateAllowance: bigint;
+  currentLockupAllowance: bigint;
+  currentRateUsed: bigint;
+  currentLockupUsed: bigint;
+  sufficient: boolean;
+  message?: string;
+  costs: {
+    perEpoch: bigint;
+    perDay: bigint;
+    perMonth: bigint;
+  };
+  depositAmountNeeded: bigint;
+}
+
+export interface StorageCosts {
+  pricePerTiBPerMonthNoCDN: bigint;
+  pricePerTiBPerMonthWithCDN: bigint;
+}

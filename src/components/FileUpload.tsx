@@ -253,16 +253,18 @@ export default function FileUpload({ onUploadComplete, disabled }: FileUploadPro
               <div className="text-sm text-gray-500">
                 {progress}% complete
               </div>
-              {status && (
+              {status && !status.includes('❌') && (
                 <div className="text-sm text-gray-600 text-center">
                   {status}
                 </div>
               )}
               {status && status.includes('❌') && (
-                <div className="mt-4 space-y-2">
-                  <p className="text-xs text-red-600">
-                    Upload failed. You can retry with the same settings or generate a new key.
-                  </p>
+                <div className="mt-4 space-y-3">
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                    <div className="text-sm text-red-800 whitespace-pre-line">
+                      {status.replace('❌ ', '')}
+                    </div>
+                  </div>
                   <div className="flex space-x-2 justify-center">
                     <button
                       onClick={() => {
