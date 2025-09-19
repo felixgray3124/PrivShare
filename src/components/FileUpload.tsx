@@ -87,6 +87,20 @@ export default function FileUpload({ onUploadComplete, disabled }: FileUploadPro
   const handleFile = async (file: File) => {
     if (disabled || isUploading) return
     
+    // Check file size limits
+    const MIN_FILE_SIZE = 127; // bytes
+    const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200 MiB
+    
+    if (file.size < MIN_FILE_SIZE) {
+      alert(`File too small: ${file.size} bytes. Minimum size is ${MIN_FILE_SIZE} bytes. Please select a larger file.`);
+      return;
+    }
+    
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`File too large: ${Math.round(file.size / 1024 / 1024)} MiB. Maximum size is ${Math.round(MAX_FILE_SIZE / 1024 / 1024)} MiB. Please select a smaller file.`);
+      return;
+    }
+    
     // If encryption is selected but no key, generate one first
     let finalCustomKey = customKey;
     if (isEncrypted && !customKey.trim()) {
@@ -236,6 +250,10 @@ export default function FileUpload({ onUploadComplete, disabled }: FileUploadPro
           onChange={handleFileInput}
           disabled={disabled || isUploading}
         />
+        
+        <div className="text-xs text-gray-500 text-center mb-2">
+          File size: 127 bytes - 200 MiB
+        </div>
         
         <div className="flex flex-col items-center space-y-4">
           {isUploading ? (

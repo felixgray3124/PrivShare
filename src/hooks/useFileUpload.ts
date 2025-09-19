@@ -245,7 +245,11 @@ export const useFileUpload = () => {
         
         // Enhanced error handling with specific guidance
         const errorMessage = lastError?.message || 'Unknown error';
-        if (errorMessage.includes('500') || errorMessage.includes('Internal Server Error')) {
+        if (errorMessage.includes('below minimum allowed size')) {
+          throw new Error(`Upload failed: File too small. The file must be at least 127 bytes. Please select a larger file.`);
+        } else if (errorMessage.includes('exceeds maximum allowed size')) {
+          throw new Error(`Upload failed: File too large. The file must be smaller than 200 MiB. Please select a smaller file.`);
+        } else if (errorMessage.includes('500') || errorMessage.includes('Internal Server Error')) {
           throw new Error(`Upload failed: Network connection issues. Please check your internet connection and try again. The storage provider returned a server error (500). This might be a temporary network issue.`);
         } else if (errorMessage.includes('exit=[33]') || errorMessage.includes('contract reverted')) {
           throw new Error(`Upload failed: Contract execution failed (Error 33). This often happens with new wallets when creating datasets. The wallet may not have sufficient permissions or there may be network issues. Please try the following: 1) Wait a few minutes and try again, 2) Refresh the page and reconnect your wallet, 3) Check your wallet has sufficient FIL for gas fees, 4) Try using a different wallet, 5) Contact support if the problem persists.`);
