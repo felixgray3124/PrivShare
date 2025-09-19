@@ -88,41 +88,92 @@ export const useFileUpload = () => {
       setStatus("💰 Checking USDFC balance and storage allowances...");
       setProgress(20);
 
-      // 用于存储提供商信息的变量
+      // Variable to store provider information
       let selectedProvider: any = null;
 
-      // Create storage service
-      const storageService = await synapse.createStorage({
-        callbacks: {
-          onDataSetResolved: (info) => {
-            console.log("Dataset resolved:", info);
-            setStatus("🔗 Existing dataset found and resolved");
-            setProgress(30);
+      // Create storage service with fallback mechanism
+      let storageService;
+      let lastError: Error | null = null;
+      
+      try {
+        // First attempt: let Synapse auto-select provider
+        storageService = await synapse.createStorage({
+          callbacks: {
+            onDataSetResolved: (info) => {
+              console.log("Dataset resolved:", info);
+              setStatus("🔗 Existing dataset found and resolved");
+              setProgress(30);
+            },
+            onDataSetCreationStarted: (transactionResponse) => {
+              console.log("Dataset creation started:", transactionResponse);
+              setStatus("🏗️ Creating new dataset on blockchain...");
+              setProgress(35);
+            },
+            onDataSetCreationProgress: (status) => {
+              console.log("Dataset creation progress:", status);
+              if (status.transactionSuccess) {
+                setStatus(`⛓️ Dataset transaction confirmed on chain`);
+                setProgress(45);
+              }
+              if (status.serverConfirmed) {
+                setStatus(`🎉 Dataset ready! (${Math.round(status.elapsedMs / 1000)}s)`);
+                setProgress(50);
+              }
+            },
+            onProviderSelected: (provider) => {
+              console.log("Storage provider selected:", provider);
+              setStatus(`🏪 Storage provider selected`);
+              // Store directly to variable
+              selectedProvider = provider;
+            },
           },
-          onDataSetCreationStarted: (transactionResponse) => {
-            console.log("Dataset creation started:", transactionResponse);
-            setStatus("🏗️ Creating new dataset on blockchain...");
-            setProgress(35);
-          },
-          onDataSetCreationProgress: (status) => {
-            console.log("Dataset creation progress:", status);
-            if (status.transactionSuccess) {
-              setStatus(`⛓️ Dataset transaction confirmed on chain`);
-              setProgress(45);
-            }
-            if (status.serverConfirmed) {
-              setStatus(`🎉 Dataset ready! (${Math.round(status.elapsedMs / 1000)}s)`);
-              setProgress(50);
-            }
-          },
-          onProviderSelected: (provider) => {
-            console.log("Storage provider selected:", provider);
-            setStatus(`🏪 Storage provider selected`);
-            // 直接存储到变量中
-            selectedProvider = provider;
-          },
-        },
-      });
+        });
+      } catch (error) {
+        console.warn("Auto provider selection failed, trying fallback provider ID 3:", error);
+        lastError = error as Error;
+        
+        // Fallback: Force use provider ID 3 (ezpdp)
+        setStatus(`🔄 Provider failed, trying fallback provider (ID: 3)...`);
+        setProgress(30);
+        
+        try {
+          storageService = await synapse.createStorage({
+            providerId: 3, // Force use ezpdp provider
+            callbacks: {
+              onDataSetResolved: (info) => {
+                console.log("Fallback dataset resolved:", info);
+                setStatus("🔗 Fallback dataset found and resolved");
+                setProgress(30);
+              },
+              onDataSetCreationStarted: (transactionResponse) => {
+                console.log("Fallback dataset creation started:", transactionResponse);
+                setStatus("🏗️ Creating dataset with fallback provider...");
+                setProgress(35);
+              },
+              onDataSetCreationProgress: (status) => {
+                console.log("Fallback dataset creation progress:", status);
+                if (status.transactionSuccess) {
+                  setStatus(`⛓️ Fallback dataset transaction confirmed on chain`);
+                  setProgress(45);
+                }
+                if (status.serverConfirmed) {
+                  setStatus(`🎉 Fallback dataset ready! (${Math.round(status.elapsedMs / 1000)}s)`);
+                  setProgress(50);
+                }
+              },
+              onProviderSelected: (provider) => {
+                console.log("Fallback storage provider selected:", provider);
+                setStatus(`🏪 Fallback provider selected (ID: 3)`);
+                // Store directly to variable
+                selectedProvider = provider;
+              },
+            },
+          });
+        } catch (fallbackError) {
+          console.error("Fallback provider also failed:", fallbackError);
+          throw new Error(`Upload failed: Both auto-selected and fallback providers failed. Auto-selected error: ${lastError?.message}. Fallback error: ${(fallbackError as Error).message}`);
+        }
+      }
 
       setStatus("📁 Uploading file to storage provider...");
       setProgress(55);
