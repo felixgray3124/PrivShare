@@ -130,7 +130,6 @@ The **cloud storage and file-sharing market** is massive:
   - Support for public/private/paid sharing  
   - Polished production dApp  
 ---
-<<<<<<< HEAD
 
 ## 🏗 Project Structure
 
@@ -264,5 +263,3 @@ PrivShare is a **full-stack showcase of Filecoin Onchain Cloud**:
 - **FilecoinPay** → Paywalled or subscription-based sharing  
 - **FilCDN** → Seamless global delivery  
 ---
-=======
->>>>>>> 112f0b84479821d2180d94beb689309994e25837
