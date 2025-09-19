@@ -88,28 +88,75 @@ export const useFileUpload = () => {
       setStatus("💰 Checking USDFC balance and storage allowances...");
       setProgress(20);
 
+      // Check network connectivity
+      try {
+        setStatus("🌐 Checking network connectivity...");
+        const testResponse = await fetch('https://api.calibration.node.glif.io/rpc/v1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'Filecoin.ChainHead',
+            params: [],
+            id: 1
+          })
+        });
+        
+        if (!testResponse.ok) {
+          console.warn('Network connectivity test failed:', testResponse.status);
+          setStatus("⚠️ Network connectivity issues detected, proceeding with caution...");
+        } else {
+          console.log('Network connectivity test passed');
+        }
+      } catch (networkError) {
+        console.warn('Network connectivity test failed:', networkError);
+        setStatus("⚠️ Network connectivity issues detected, proceeding with caution...");
+      }
+
       // Variable to store provider information
       let selectedProvider: any = null;
 
-      // Create storage service with fallback mechanism
+      // Create storage service with fallback mechanism and retry logic
       let storageService;
       let lastError: Error | null = null;
       
+      // Helper function to create storage with retry
+      const createStorageWithRetry = async (options: any, retryCount = 0): Promise<any> => {
+        const maxRetries = 2;
+        const retryDelay = 2000; // 2 seconds
+        
+        try {
+          return await synapse.createStorage(options);
+        } catch (error) {
+          console.warn(`Storage creation attempt ${retryCount + 1} failed:`, error);
+          
+          if (retryCount < maxRetries) {
+            console.log(`Retrying in ${retryDelay}ms... (attempt ${retryCount + 2}/${maxRetries + 1})`);
+            setStatus(`🔄 Retrying storage creation... (attempt ${retryCount + 2}/${maxRetries + 1})`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+            return createStorageWithRetry(options, retryCount + 1);
+          }
+          
+          throw error;
+        }
+      };
+      
       try {
         // First attempt: let Synapse auto-select provider
-        storageService = await synapse.createStorage({
+        setStatus("🔍 Selecting storage provider...");
+        storageService = await createStorageWithRetry({
           callbacks: {
-            onDataSetResolved: (info) => {
+            onDataSetResolved: (info: any) => {
               console.log("Dataset resolved:", info);
               setStatus("🔗 Existing dataset found and resolved");
               setProgress(30);
             },
-            onDataSetCreationStarted: (transactionResponse) => {
+            onDataSetCreationStarted: (transactionResponse: any) => {
               console.log("Dataset creation started:", transactionResponse);
               setStatus("🏗️ Creating new dataset on blockchain...");
               setProgress(35);
             },
-            onDataSetCreationProgress: (status) => {
+            onDataSetCreationProgress: (status: any) => {
               console.log("Dataset creation progress:", status);
               if (status.transactionSuccess) {
                 setStatus(`⛓️ Dataset transaction confirmed on chain`);
@@ -120,7 +167,7 @@ export const useFileUpload = () => {
                 setProgress(50);
               }
             },
-            onProviderSelected: (provider) => {
+            onProviderSelected: (provider: any) => {
               console.log("Storage provider selected:", provider);
               setStatus(`🏪 Storage provider selected`);
               // Store directly to variable
@@ -137,20 +184,20 @@ export const useFileUpload = () => {
         setProgress(30);
         
         try {
-          storageService = await synapse.createStorage({
+          storageService = await createStorageWithRetry({
             providerId: 3, // Force use ezpdp provider
             callbacks: {
-              onDataSetResolved: (info) => {
+              onDataSetResolved: (info: any) => {
                 console.log("Fallback dataset resolved:", info);
                 setStatus("🔗 Fallback dataset found and resolved");
                 setProgress(30);
               },
-              onDataSetCreationStarted: (transactionResponse) => {
+              onDataSetCreationStarted: (transactionResponse: any) => {
                 console.log("Fallback dataset creation started:", transactionResponse);
                 setStatus("🏗️ Creating dataset with fallback provider...");
                 setProgress(35);
               },
-              onDataSetCreationProgress: (status) => {
+              onDataSetCreationProgress: (status: any) => {
                 console.log("Fallback dataset creation progress:", status);
                 if (status.transactionSuccess) {
                   setStatus(`⛓️ Fallback dataset transaction confirmed on chain`);
@@ -161,7 +208,7 @@ export const useFileUpload = () => {
                   setProgress(50);
                 }
               },
-              onProviderSelected: (provider) => {
+              onProviderSelected: (provider: any) => {
                 console.log("Fallback storage provider selected:", provider);
                 setStatus(`🏪 Fallback provider selected (ID: 3)`);
                 // Store directly to variable
@@ -171,7 +218,16 @@ export const useFileUpload = () => {
           });
         } catch (fallbackError) {
           console.error("Fallback provider also failed:", fallbackError);
-          throw new Error(`Upload failed: Both auto-selected and fallback providers failed. Auto-selected error: ${lastError?.message}. Fallback error: ${(fallbackError as Error).message}`);
+          
+          // Provide more helpful error message
+          const errorMessage = fallbackError instanceof Error ? fallbackError.message : 'Unknown error';
+          if (errorMessage.includes('500') || errorMessage.includes('Internal Server Error')) {
+            throw new Error(`Upload failed: Network connection issues. Please check your internet connection and try again. Both providers returned server errors (500). This might be a temporary network issue.`);
+          } else if (errorMessage.includes('failed to estimate gas')) {
+            throw new Error(`Upload failed: Blockchain transaction failed. This might be due to network congestion or insufficient gas. Please try again later.`);
+          } else {
+            throw new Error(`Upload failed: Both auto-selected and fallback providers failed. Auto-selected error: ${lastError?.message}. Fallback error: ${errorMessage}`);
+          }
         }
       }
 
@@ -180,7 +236,7 @@ export const useFileUpload = () => {
 
       // Upload file to storage provider
       const { pieceCid } = await storageService.upload(fileData, {
-        onUploadComplete: (piece) => {
+        onUploadComplete: (piece: any) => {
           setStatus(`📊 File uploaded! Signing msg to add pieces to the dataset`);
           setUploadedInfo((prev) => ({
             ...prev,
@@ -191,7 +247,7 @@ export const useFileUpload = () => {
           }));
           setProgress(80);
         },
-        onPieceAdded: (transactionResponse) => {
+        onPieceAdded: (transactionResponse: any) => {
           setStatus(
             `🔄 Waiting for transaction to be confirmed on chain${
               transactionResponse ? `(txHash: ${transactionResponse.hash})` : ""
@@ -262,6 +318,8 @@ export const useFileUpload = () => {
       console.error("Upload failed:", error);
       setStatus(`❌ Upload failed: ${error.message || "Please try again"}`);
       setProgress(0);
+      // Reset uploaded info to allow retry
+      setUploadedInfo(null);
     },
   });
 

@@ -106,6 +106,7 @@ export default function FileUpload({ onUploadComplete, disabled }: FileUploadPro
       // Upload completion handling is done by useEffect listening to uploadedInfo changes
     } catch (error) {
       console.error('Upload failed:', error)
+      // Don't reset the key here - let user decide whether to retry with same key or generate new one
     }
   }
 
@@ -255,6 +256,36 @@ export default function FileUpload({ onUploadComplete, disabled }: FileUploadPro
               {status && (
                 <div className="text-sm text-gray-600 text-center">
                   {status}
+                </div>
+              )}
+              {status && status.includes('❌') && (
+                <div className="mt-4 space-y-2">
+                  <p className="text-xs text-red-600">
+                    Upload failed. You can retry with the same settings or generate a new key.
+                  </p>
+                  <div className="flex space-x-2 justify-center">
+                    <button
+                      onClick={() => {
+                        setCustomKey('');
+                        setUseRandomKey(true);
+                        handleKeyGeneration();
+                      }}
+                      className="px-3 py-1 text-xs bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-colors"
+                    >
+                      Generate New Key
+                    </button>
+                    <button
+                      onClick={() => {
+                        // Reset upload state to allow retry
+                        uploadFileMutation.reset();
+                        // Trigger file dialog
+                        openFileDialog();
+                      }}
+                      className="px-3 py-1 text-xs bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 transition-colors"
+                    >
+                      Retry Upload
+                    </button>
+                  </div>
                 </div>
               )}
             </>
